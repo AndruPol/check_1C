@@ -8,25 +8,25 @@ Nagios/Icinga плагин для мониторинга сервера прил
 
 Параметры:
 
-  -H,  --host=NAME       имя хоста для соединения; по умолчанию localhost
+    -H,  --host=NAME       имя хоста для соединения; по умолчанию localhost
 
-  -p,  --port=NUM        номер порта для соединения; по умолчанию 1545
+    -p,  --port=NUM        номер порта для соединения; по умолчанию 1545
 
-  -C,  --command=CMD     команда проверки; по умолчанию cluster
+    -C,  --command=CMD     команда проверки; по умолчанию cluster
 
-  -i,  --infobase=NAME   опционально, имя информационной базы на сервере, используется с командой --command=infobase
+    -i,  --infobase=NAME   опционально, имя информационной базы на сервере, используется с командой --command=infobase
 
-  -U,  --cuser=NAME      опционально, ключ rac --cluster-user=NAME, имя пользователя администратора кластера
+    -U,  --cuser=NAME      опционально, ключ rac --cluster-user=NAME, имя пользователя администратора кластера
 
-  -P,  --cpwd=PWD        опционально, ключ rac --cluster-pwd=PWD, пароль администратора кластера
+    -P,  --cpwd=PWD        опционально, ключ rac --cluster-pwd=PWD, пароль администратора кластера
 
-  -A,  --iuser=NAME      опционально, ключ rac --infobase-user=NAME, имя администратора информационной базы
+    -A,  --iuser=NAME      опционально, ключ rac --infobase-user=NAME, имя администратора информационной базы
 
-  -S,  --ipwd=PWD        опционально, ключ rac --infobase-pwd=PWD, пароль администратора информацинной базы
+    -S,  --ipwd=PWD        опционально, ключ rac --infobase-pwd=PWD, пароль администратора информацинной базы
 
-  -w,  --warn=NUM        опционально, порог WARNING, используется с командами: connection, session
+    -w,  --warn=NUM        опционально, порог WARNING, используется с командами: connection, session
 
-  -c,  --crit=NUM        опционально, порог CRITICAL, используется с командами: connection, session
+    -c,  --crit=NUM        опционально, порог CRITICAL, используется с командами: connection, session
 
   список команд:
 
