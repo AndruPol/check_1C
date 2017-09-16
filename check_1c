@@ -1,0 +1,296 @@
+#!/bin/sh
+#
+# Nagios/Icinga plugin to check 1C Enterprise 8.3 application server via
+# 1C:Enterprise 8.3 Remote Administration Server, need to be running as ras --daemon cluster
+
+me="$(basename $0)"
+version="0.1"
+
+RAC="/opt/1C/v8.3/x86_64/rac"
+
+usage () {
+cat <<EOF
+Usage: $me <options>
+
+Check 1C Enterprise application server via 1C:Enterprise 8.3 Remote Administration Server
+need to be running as ras --daemon cluster
+This is version $version written by a.pol@mail.ru
+
+Options:
+
+  -H,  --host=NAME       hostname to connect to; defaults to localhost
+  -p,  --port=NUM        port to connect to; defaults to 1545
+  -C,  --command=CMD     command to check; defaults to cluster
+  -i,  --infobase=NAME   optional, information database name, use with --command=infobase
+  -U,  --cuser=NAME      optional, --cluster-user=NAME, cluster administrator username
+  -P,  --cpwd=PWD        optional, --cluster-pwd=PWD, cluster administrator password
+  -A,  --iuser=NAME      optional, --infobase-user=NAME, infobase administrator username
+  -S,  --ipwd=PWD        optional, --infobase-pwd=PWD, infobase administrator password
+  -w,  --warn=NUM        optional, warning threshold for connection & session command
+  -c,  --crit=NUM        optional, critical threshold for connection & session command
+
+  commands list:
+     cluster    - check cluster available,
+     server     - check number of servers,
+     process    - check number of working processes,
+     session    - check number of active sessions,
+     connection - check number of active connections,
+     infobase   - check number of infobases,
+                  new sessions deny state and scheduled jobs deny state with -i parameter
+  --help, -h     Print this help text.
+
+EOF
+}
+
+
+## exit statuses recognized by Nagios
+OK=0
+WARNING=1
+CRITICAL=2
+UNKNOWN=3
+
+
+## helper functions
+die () {
+  rc="$1"
+  shift
+  (echo -n "$me: ERROR: ";
+      if [ $# -gt 0 ]; then echo "$@"; else cat; fi) 1>&2
+  exit $rc
+}
+
+warn () {
+  (echo -n "$me: WARNING: ";
+      if [ $# -gt 0 ]; then echo "$@"; else cat; fi) 1>&2
+}
+
+have_command () {
+  type "$1" >/dev/null 2>/dev/null
+}
+
+require_command () {
+  if ! have_command "$1"; then
+    die 1 "Could not find required command '$1' in system PATH. Aborting."
+  fi
+}
+
+is_absolute_path () {
+    expr match "$1" '/' >/dev/null 2>/dev/null
+}
+
+
+## parse command-line
+
+short_opts='H:p:C:i:U:P:A:S:w:c:h'
+long_opts='host:,port:,check:,infobase:,cuser:,cpwd:,iuser:,ipwd:,warn:,crit:,help'
+
+# test which `getopt` version is available:
+# - GNU `getopt` will generate no output and exit with status 4
+# - POSIX `getopt` will output `--` and exit with status 0
+getopt -T > /dev/null
+rc=$?
+if [ "$rc" -eq 4 ]; then
+    # GNU getopt
+    args=$(getopt --name "$me" --shell sh -l "$long_opts" -o "$short_opts" -- "$@")
+    if [ $? -ne 0 ]; then
+        die 1 "Type '$me --help' to get usage information."
+    fi
+    # use 'eval' to remove getopt quoting
+    eval set -- $args
+else
+    # old-style getopt, use compatibility syntax
+    args=$(getopt "$short_opts" "$@")
+    if [ $? -ne 0 ]; then
+        die 1 "Type '$me --help' to get usage information."
+    fi
+    set -- $args
+fi
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -H| --host) host="$2"; shift ;;
+        -p| --port) port="$2"; shift ;;
+        -C| --check) check="$2"; shift ;;
+        -i| --infobase) infobase="$2"; shift ;;
+        -U| --cuser) cluster_user="$2"; shift ;;
+        -P| --cpwd) cluster_pwd="$2"; shift ;;
+        -A| --iuser) infobase_user="$2"; shift ;;
+        -S| --ipwd) infobase_pwd="$2"; shift ;;
+        -w| --warn) warn="$2"; shift ;;
+        -c| --crit) crit="$2"; shift ;;
+        -h| --help) usage; exit 0 ;;
+        --)         shift; break ;;
+    esac
+    shift
+done
+
+
+## main
+
+require_command $RAC
+
+if [ -z "$host" ]; then
+    host="localhost"
+fi
+
+if [ -z "$port" ]; then
+    port=1545
+fi
+
+if [ -z "$check" ]; then
+    check="cluster"
+fi
+
+CLUSTER_AUTH=""
+if [ -n "$cluster_user" ] && [ -n "$cluster_pwd" ]; then
+    CLUSTER_AUTH="--cluster-user=$cluster_user --cluster-pwd=$cluster_pwd"
+fi
+
+INFOBASE_AUTH=""
+if [ -n "$infobase_user" ] && [ -n "$infobase_pwd" ]; then
+    INFOBASE_AUTH="--infobase-user=$infobase_user --infobase-pwd=$infobase_pwd"
+fi
+
+tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+`$RAC cluster list $host:$port >$tmpfile 2>&1`
+if [ $? -ne 0 ]; then
+    echo "CRITICAL - connect error"
+    exit $CRITICAL
+fi
+
+cluster_uid=`cat $tmpfile | awk '/cluster/ {print $3}'`
+cluster_host=`cat $tmpfile | awk '/host/ {print $3}'`
+cluster_port=`cat $tmpfile | awk '/port/ {print $3}'`
+cluster_name=`cat $tmpfile | awk '/name/ {print}' | awk -F: '{print $2}'`
+#unlink $tmpfile
+
+case $check in
+    cluster)
+	message="$cluster_name found"
+	;;
+    server)
+	tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	`$RAC server list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	if [ $? -ne 0 ]; then
+	    unlink $tmpfile
+	    die 1 "cluster auth required"
+	else
+	    servers=`cat $tmpfile |grep server |wc -l`
+	    unlink $tmpfile
+	    message="$servers server(s) found | servers=$servers"
+	fi
+	;;
+    process)
+	tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	`$RAC process list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	if [ $? -ne 0 ]; then
+	    unlink $tmpfile
+	    die 1 "cluster auth required"
+	else
+	    processes=`cat $tmpfile |grep pid |wc -l`
+	    unlink $tmpfile
+	    message="$processes working process(es) found | processes=$processes"
+	fi
+	;;
+    connection)
+	tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	`$RAC connection list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	if [ $? -ne 0 ]; then
+	    unlink $tmpfile
+	    die 1 "cluster auth required"
+	else
+	    connections=`cat $tmpfile |grep conn-id |wc -l`
+	    unlink $tmpfile
+	    if [ -n "$crit" ] && [ "$crit" -gt 0 ]; then
+		if [ "$connections" -ge $crit ]; then
+		    message="$connections connection(s) found | connections=$connections"
+		    echo "CRITICAL - ${message}"
+		    exit $CRITICAL
+		fi
+	    fi
+	    if [ -n "$warn" ] && [ "$warn" -gt 0 ]; then
+		if [ "$connections" -ge $warn ]; then
+		    message="$connections connection(s) found | connections=$connections"
+		    echo "WARNING - ${message}"
+		    exit $WARNING
+		fi
+	    fi
+	    message="$connections connection(s) found | connections=$connections"
+	fi
+	;;
+    session)
+	tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	`$RAC session list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	if [ $? -ne 0 ]; then
+	    unlink $tmpfile
+	    die 1 "cluster auth required"
+	else
+	    sessions=`cat $tmpfile |grep session-id |wc -l`
+	    unlink $tmpfile
+	    if [ -n "$crit" ] && [ "$crit" -gt 0 ]; then
+		if [ "$sessions" -ge $crit ]; then
+		    message="$sessions session(s) found | sessions=$sessions"
+		    echo "CRITICAL - ${message}"
+		    exit $CRITICAL
+		fi
+	    fi
+	    if [ -n "$warn" ] && [ "$warn" -gt 0 ]; then
+		if [ "$sessions" -ge $warn ]; then
+		    message="$sessions session(s) found | sessions=$sessions"
+		    echo "WARNING - ${message}"
+		    exit $WARNING
+		fi
+	    fi
+	    message="$sessions session(s) found | sessions=$sessions"
+	fi
+	;;
+    infobase)
+	if [ -z "$infobase" ]; then
+	    tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	    `$RAC infobase summary list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	    if [ $? -ne 0 ]; then
+		unlink $tmpfile
+		die 1 "cluster auth required"
+	    else
+		infobases=`cat $tmpfile |grep infobase |wc -l`
+		unlink $tmpfile
+		message="$infobases infobases found | infobases=$infobases"
+	    fi
+	else
+	    tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	    `$RAC infobase summary list --cluster=$cluster_uid $CLUSTER_AUTH $host:$port > $tmpfile 2>&1`
+	    infobase_uid=""
+	    if [ $? -ne 0 ]; then
+		unlink $tmpfile
+		die 1 "cluster auth required"
+	    else
+		infobase_uid=`cat $tmpfile |grep ": $infobase" -B1 |awk '/infobase/ {print $3}'`
+		unlink $tmpfile
+	    fi
+
+	    if [ -z "$infobase_uid" ]; then
+		die 2 "infobase $infobase not found"
+	    fi
+	    
+	    tmpfile=$(mktemp "${TMPDIR:-/tmp/}$(basename $0).XXXXXXXXXXXX")
+	    `$RAC infobase info --cluster=$cluster_uid $CLUSTER_AUTH --infobase=$infobase_uid $INFOBASE_AUTH $host:$port > $tmpfile 2>&1`
+	    if [ $? -ne 0 ]; then
+		unlink $tmpfile
+		die 1 "cluster and infobase auth required"
+	    else
+		sessions_deny=`cat $tmpfile | awk '/sessions-deny/ {print $3}'`
+		scheduled_jobs_deny=`cat $tmpfile | awk '/scheduled-jobs-deny/ {print $3}'`
+		unlink $tmpfile
+		if [ "x$sessions_deny" = "xon" ] || [ "x$scheduled_jobs_deny" = "xon" ]; then
+		    message="infobase $infobase locked or scheduled jobs denied"
+		    echo "CRITICAL - ${message}"
+		    exit $CRITICAL
+		fi
+		message="infobase $infobase not locked"
+	    fi
+	fi
+	;;
+esac
+
+echo "OK - ${message}"
+exit $OK
